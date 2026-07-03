@@ -8,7 +8,7 @@
  *   npx tsx scripts/domain-cli.ts del <domain>   # DB rows only
  */
 import { prisma } from "../src/server/db";
-import { generateDkim, readDkim } from "../src/server/mailserver";
+import { generateDkim, enableDkimSigning, readDkim } from "../src/server/mailserver";
 import { listManagedDomains, deleteManagedDomain } from "../src/server/domains";
 
 const [, , op, name, org] = process.argv;
@@ -22,6 +22,7 @@ if (op === "add") {
   });
   await prisma.domain.upsert({ where: { name }, update: {}, create: { name, orgId: o.id } });
   await generateDkim(name);
+  await enableDkimSigning(name);
   console.log("ADDED " + name);
 } else if (op === "dkim") {
   console.log(await readDkim(name));

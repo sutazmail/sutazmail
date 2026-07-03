@@ -7,6 +7,7 @@ import {
   addAlias,
   deleteAccount,
   deleteAlias,
+  enableDkimSigning,
   generateDkim,
   updateAccountPassword,
 } from "@/server/mailserver";
@@ -248,6 +249,9 @@ export async function addDomainAction(
     if (existing) return { ok: false, error: "That domain already exists" };
     await prisma.domain.create({ data: { name, orgId: org.id } });
     await generateDkim(name);
+    // Wire the key into rspamd so mail from this domain is actually DKIM-signed
+    // (best-effort + self-rolling-back; generating a key alone does not sign mail).
+    await enableDkimSigning(name);
     await audit("domain.add", name, { orgId: org.id, actorId: ctx.user.id });
     revalidatePath("/domains");
     return { ok: true };

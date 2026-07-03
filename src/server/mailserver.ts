@@ -382,6 +382,109 @@ export async function removeDkim(domain: string): Promise<void> {
   ).catch(() => undefined);
 }
 
+// --- DKIM signing activation (rspamd dkim_signing.conf) -------------------------
+// docker-mailserver's `setup config dkim` generates KEYS but does not add the domain
+// to the rspamd signing config, so mail from an added domain isn't actually signed.
+// These helpers wire a domain's key into the `domain { }` block of the signing config
+// (and remove it), guarded by `rspamadm configtest` + rollback so a bad edit can never
+// break signing for the other domains.
+
+const SIGNING_CONF_PERSISTENT = "/tmp/docker-mailserver/rspamd/override.d/dkim_signing.conf";
+const SIGNING_CONF_RUNTIME = "/etc/rspamd/override.d/dkim_signing.conf";
+
+function reEscape(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/** Index of the `}` that closes the brace opened at openIdx, or -1. */
+function matchBrace(text: string, openIdx: number): number {
+  let depth = 0;
+  for (let i = openIdx; i < text.length; i++) {
+    if (text[i] === "{") depth++;
+    else if (text[i] === "}") {
+      depth--;
+      if (depth === 0) return i;
+    }
+  }
+  return -1;
+}
+
+function signingBlock(domain: string): string {
+  return (
+    `    ${domain} {\n` +
+    `        path = "/tmp/docker-mailserver/rspamd/dkim/rsa-2048-mail-${domain}.private.txt";\n` +
+    `        selector = "mail";\n` +
+    `    }\n`
+  );
+}
+
+/** Insert a domain's signing block into the `domain { }` map (idempotent). Pure — unit-tested. */
+export function addDomainToSigningConfig(conf: string, domain: string): string {
+  if (new RegExp(`\\n[ \\t]*${reEscape(domain)}[ \\t]*\\{`).test(conf)) return conf; // already present
+  const m = conf.match(/\bdomain\s*\{/);
+  if (!m || m.index === undefined) throw new Error("dkim_signing.conf: no domain { } block");
+  const close = matchBrace(conf, m.index + m[0].length - 1);
+  if (close === -1) throw new Error("dkim_signing.conf: unbalanced domain { } block");
+  const before = conf.slice(0, close);
+  const sep = before.endsWith("\n") ? "" : "\n";
+  return before + sep + signingBlock(domain) + conf.slice(close);
+}
+
+/** Remove a domain's signing block from the config (no-op if absent). Pure — unit-tested. */
+export function removeDomainFromSigningConfig(conf: string, domain: string): string {
+  const m = conf.match(new RegExp(`\\n([ \\t]*)${reEscape(domain)}[ \\t]*\\{`));
+  if (!m || m.index === undefined) return conf;
+  const lineStart = m.index + 1; // keep the preceding newline, drop from this line's indent
+  const close = matchBrace(conf, m.index + m[0].length - 1);
+  if (close === -1) return conf;
+  let end = close + 1;
+  if (conf[end] === "\n") end++;
+  return conf.slice(0, lineStart) + conf.slice(end);
+}
+
+/** Write the new signing config (persistent + runtime), validate, reload; roll back if invalid. */
+async function applySigningConfig(content: string): Promise<void> {
+  const b64 = Buffer.from(content, "utf8").toString("base64");
+  const bak = `${SIGNING_CONF_RUNTIME}.sutazmail-bak`;
+  const script =
+    `cp ${SIGNING_CONF_RUNTIME} ${bak} 2>/dev/null; ` +
+    `printf '%s' '${b64}' | base64 -d > ${SIGNING_CONF_PERSISTENT} && ` +
+    `cp ${SIGNING_CONF_PERSISTENT} ${SIGNING_CONF_RUNTIME} && ` +
+    `if rspamadm configtest >/dev/null 2>&1; then ` +
+    `supervisorctl restart rspamd >/dev/null 2>&1; echo SIGN_OK; ` +
+    `else cp ${bak} ${SIGNING_CONF_RUNTIME}; cp ${bak} ${SIGNING_CONF_PERSISTENT}; echo SIGN_ROLLBACK; fi`;
+  const r = await runCommand(script, 30);
+  if (!r.stdout.includes("SIGN_OK")) {
+    throw new Error("DKIM signing config failed validation; rolled back (no change applied)");
+  }
+}
+
+/** Activate DKIM signing for a domain. Best-effort: never throws, never leaves a broken config. */
+export async function enableDkimSigning(domain: string): Promise<void> {
+  assertDomain(domain);
+  try {
+    const cur = await runCommand(`cat ${SIGNING_CONF_RUNTIME}`);
+    if (cur.returncode !== 0) return; // no signing config present — nothing to wire
+    const next = addDomainToSigningConfig(cur.stdout, domain);
+    if (next !== cur.stdout) await applySigningConfig(next);
+  } catch (err) {
+    console.error("[dkim] enableDkimSigning:", err instanceof Error ? err.message : err);
+  }
+}
+
+/** Deactivate DKIM signing for a domain. Best-effort: never throws. */
+export async function disableDkimSigning(domain: string): Promise<void> {
+  assertDomain(domain);
+  try {
+    const cur = await runCommand(`cat ${SIGNING_CONF_RUNTIME}`);
+    if (cur.returncode !== 0) return;
+    const next = removeDomainFromSigningConfig(cur.stdout, domain);
+    if (next !== cur.stdout) await applySigningConfig(next);
+  } catch (err) {
+    console.error("[dkim] disableDkimSigning:", err instanceof Error ? err.message : err);
+  }
+}
+
 /** Best-effort read of a domain's DKIM public DNS record. Returns null if unavailable. */
 export async function readDkim(domain: string): Promise<string | null> {
   assertDomain(domain);

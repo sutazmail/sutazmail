@@ -5,7 +5,7 @@
  * own editable DnsRecord rows.
  */
 import { prisma } from "./db";
-import { listAccounts, readDkim, removeDkim } from "./mailserver";
+import { disableDkimSigning, listAccounts, readDkim, removeDkim } from "./mailserver";
 import { getDomainDns } from "./dns-records";
 import { assertDomain } from "./validate";
 import type { EditableDnsRecord } from "@/lib/dns";
@@ -67,7 +67,8 @@ export async function deleteManagedDomain(name: string): Promise<void> {
   }
 
   await prisma.domain.delete({ where: { id: domain.id } });
-  await removeDkim(domainName);
+  await disableDkimSigning(domainName); // remove from rspamd signing (+ reload) first
+  await removeDkim(domainName); // then delete the now-unreferenced key files
 
   // Tidy up a now-empty tenant org (the seeded orgs always keep users, so are never removed).
   const [remainingDomains, remainingUsers] = await Promise.all([
