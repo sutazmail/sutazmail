@@ -5,5 +5,9 @@ node_modules
 *.md
 docs
 coverage
-# Postgres data volume lives inside the stack dir on the NAS — never build-context it.
+# Runtime data (Postgres + mail volumes) lives inside the stack dir — never build-context
+# it. `data` only matches the context root; `**/data` also catches deploy/data in the
+# portable template (build context = repo root), whose mail-state is root-owned and
+# unreadable, which would otherwise break `docker compose build` on any rebuild.
 data
+**/data
