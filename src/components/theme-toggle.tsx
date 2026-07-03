@@ -1,33 +1,23 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import { useTheme } from "next-themes";
 import { MoonIcon, SunIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 export function ThemeToggle() {
   const { resolvedTheme, setTheme } = useTheme();
-  // The resolved theme is only known on the client; render a stable placeholder
-  // during SSR + first paint so the server and client markup match (no hydration
-  // mismatch), then swap in the real icon after mount.
-  const [mounted, setMounted] = useState(false);
-  useEffect(() => setMounted(true), []);
-  const isDark = resolvedTheme === "dark";
-
+  // Render both icons and let CSS (the `dark` class next-themes sets before first
+  // paint) reveal the right one — SSR-safe, so no mount-flag state and no hydration
+  // mismatch. resolvedTheme is only read in the click handler, which runs client-side.
   return (
     <Button
       variant="ghost"
       size="icon-sm"
-      onClick={() => setTheme(isDark ? "light" : "dark")}
+      onClick={() => setTheme(resolvedTheme === "dark" ? "light" : "dark")}
       aria-label="Toggle theme"
     >
-      {!mounted ? (
-        <span className="size-4" aria-hidden />
-      ) : isDark ? (
-        <SunIcon />
-      ) : (
-        <MoonIcon />
-      )}
+      <SunIcon className="hidden dark:block" />
+      <MoonIcon className="dark:hidden" />
     </Button>
   );
 }

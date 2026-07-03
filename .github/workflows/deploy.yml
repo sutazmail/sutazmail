@@ -1,0 +1,68 @@
+name: Deploy to NAS
+
+# Runs after CI succeeds on main, on a self-hosted runner registered to THIS repo/org
+# (sutazmail) and labelled `sutazmail-nas`. SutazStays uses a separate `sutazstay-nas`
+# runner in a different org — a self-hosted runner is scoped to one repo/org/enterprise
+# (docs.github.com/actions .../add-runners), so this never touches the SutazStays runner.
+# The NAS has no git, so instead of actions/checkout we download the commit tarball via
+# the API. Gated on repo variable NAS_RUNNER_READY=true so the job does not queue before
+# the runner is registered.
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+
+jobs:
+  deploy:
+    if: >-
+      ${{ github.event.workflow_run.conclusion == 'success'
+          && vars.NAS_RUNNER_READY == 'true' }}
+    runs-on: [self-hosted, sutazmail-nas]
+    concurrency:
+      group: sutazmail-nas-deploy
+      cancel-in-progress: false
+    steps:
+      - name: Deploy ${{ github.event.workflow_run.head_sha }} to the SutazMail v2 stack
+        env:
+          STACK: /volume1/docker/sutazmail-v2
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          export PATH=/var/packages/ContainerManager/target/usr/bin:/usr/local/bin:/usr/bin:/bin:/sbin:/usr/sbin
+
+          echo "== fetch ${SHA} tarball =="
+          curl -fsSL -H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${REPO}/tarball/${SHA}" -o /tmp/sutazmail-src.tgz
+          rm -rf /tmp/sutazmail-src && mkdir -p /tmp/sutazmail-src
+          tar xzf /tmp/sutazmail-src.tgz -C /tmp/sutazmail-src --strip-components=1
+          test -f /tmp/sutazmail-src/prisma/schema.prisma
+          test -f /tmp/sutazmail-src/docker-compose.yml
+
+          echo "== sync into ${STACK} (build context is the stack root) =="
+          # --delete keeps the tree in sync; the anchored excludes below protect prod
+          # state that is NOT in git: the Postgres data dir, the mail data, and .env
+          # (which carries every secret + SEED_SUTAZ_TENANTS=1). package-lock.json IS
+          # synced (the Docker build runs npm ci and needs it).
+          rsync -a --delete \
+            --exclude '/.git' --exclude '/node_modules' --exclude '/.next' \
+            --exclude '/src/generated' --exclude '/data' --exclude '/deploy/data' \
+            --exclude '/.env' --exclude '/.env.*' \
+            /tmp/sutazmail-src/ "${STACK}/"
+
+          cd "${STACK}"
+          echo "== build + up (container runs prisma migrate deploy && db:seed on start) =="
+          docker compose up -d --build
+
+          echo "== wait for health =="
+          ok=0
+          for i in $(seq 1 60); do
+            if curl -sf --max-time 5 http://127.0.0.1:8095/api/health >/dev/null 2>&1; then ok=1; break; fi
+            sleep 3
+          done
+          echo -n "health: "; curl -s --max-time 5 http://127.0.0.1:8095/api/health; echo
+          docker compose ps
+          [ "$ok" = 1 ] || { echo "APP NOT HEALTHY"; docker compose logs --tail 40 sutazmail; exit 1; }
+          echo "== deploy ok =="

@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16.6-alpine
+        env:
+          POSTGRES_USER: sutazmail
+          POSTGRES_PASSWORD: sutazmail
+          POSTGRES_DB: sutazmail_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U sutazmail"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      # migrate deploy + vitest (settings.test imports the client) + next build all
+      # need a real connection string; the mailserver-facing vars are only touched at
+      # request time, so dummy values keep the build/test green without a mail server.
+      DATABASE_URL: postgresql://sutazmail:sutazmail@localhost:5432/sutazmail_test
+      SESSION_SECRET: ci-not-a-real-secret-0000000000000000000000000000
+      DMS_API_KEY: ci-dummy
+      MAILSERVER_API_URL: http://127.0.0.1:1
+      MAILSERVER_SIEVE_HOST: 127.0.0.1
+      MAILSERVER_SIEVE_PORT: "4190"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Apply migrations (create schema)
+        run: npx prisma migrate deploy
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build

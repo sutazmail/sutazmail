@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState, useEffect, useState } from "react";
+import { useActionState, useState } from "react";
 import { toast } from "sonner";
 import { PlusIcon } from "lucide-react";
 import { addAliasAction, type ActionResult } from "@/app/actions";
@@ -19,19 +19,19 @@ import {
 
 export function AddAliasDialog() {
   const [open, setOpen] = useState(false);
-  const [state, formAction, pending] = useActionState<ActionResult | null, FormData>(
-    addAliasAction,
+  const [, formAction, pending] = useActionState<ActionResult | null, FormData>(
+    async (prev, fd) => {
+      const res = await addAliasAction(prev, fd);
+      if (res.ok) {
+        toast.success("Alias created");
+        setOpen(false);
+      } else {
+        toast.error(res.error);
+      }
+      return res;
+    },
     null,
   );
-
-  useEffect(() => {
-    if (state?.ok) {
-      toast.success("Alias created");
-      setOpen(false);
-    } else if (state && !state.ok) {
-      toast.error(state.error);
-    }
-  }, [state]);
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>

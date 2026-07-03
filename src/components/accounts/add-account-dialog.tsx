@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState, useEffect, useState } from "react";
+import { useActionState, useState } from "react";
 import { toast } from "sonner";
 import { ExternalLinkIcon, PlusIcon, SparklesIcon } from "lucide-react";
 import { addAccountAction, type ActionResult } from "@/app/actions";
@@ -25,20 +25,21 @@ export function AddAccountDialog({ webmailBase }: { webmailBase: string }) {
   // After a successful create we keep the credentials on screen so the operator can
   // copy them and jump straight into the new mailbox's webmail.
   const [created, setCreated] = useState<{ email: string; password: string } | null>(null);
-  const [state, formAction, pending] = useActionState<ActionResult | null, FormData>(
-    addAccountAction,
+  // Handle the result inside the action (runs in the submit transition) rather than in
+  // an effect, so we never call setState synchronously from useEffect.
+  const [, formAction, pending] = useActionState<ActionResult | null, FormData>(
+    async (prev, fd) => {
+      const res = await addAccountAction(prev, fd);
+      if (res.ok) {
+        toast.success("Account created");
+        setCreated({ email, password });
+      } else {
+        toast.error(res.error);
+      }
+      return res;
+    },
     null,
   );
-
-  useEffect(() => {
-    if (state?.ok) {
-      toast.success("Account created");
-      setCreated({ email, password });
-    } else if (state && !state.ok) {
-      toast.error(state.error);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state]);
 
   function reset() {
     setEmail("");

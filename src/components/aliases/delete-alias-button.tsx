@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState, useEffect, useState } from "react";
+import { useActionState, useState } from "react";
 import { toast } from "sonner";
 import { deleteAliasAction, type ActionResult } from "@/app/actions";
 import { Button } from "@/components/ui/button";
@@ -17,19 +17,19 @@ import {
 
 export function DeleteAliasButton({ source, recipient }: { source: string; recipient: string }) {
   const [open, setOpen] = useState(false);
-  const [state, formAction, pending] = useActionState<ActionResult | null, FormData>(
-    deleteAliasAction,
+  const [, formAction, pending] = useActionState<ActionResult | null, FormData>(
+    async (prev, fd) => {
+      const res = await deleteAliasAction(prev, fd);
+      if (res.ok) {
+        toast.success("Alias deleted");
+        setOpen(false);
+      } else {
+        toast.error(res.error);
+      }
+      return res;
+    },
     null,
   );
-
-  useEffect(() => {
-    if (state?.ok) {
-      toast.success("Alias deleted");
-      setOpen(false);
-    } else if (state && !state.ok) {
-      toast.error(state.error);
-    }
-  }, [state]);
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>

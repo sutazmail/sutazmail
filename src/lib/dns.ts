@@ -34,7 +34,6 @@ export function validateDnsInput(input: { type: string; host: string; value: str
   }
   const value = input.value.trim();
   if (value === "" || value.length > 1024) throw new Error("Value must be 1–1024 characters");
-  // eslint-disable-next-line no-control-regex
   if (/[\x00-\x1f\x7f]/.test(value)) throw new Error("Value must not contain control characters");
   return { type, host, value };
 }

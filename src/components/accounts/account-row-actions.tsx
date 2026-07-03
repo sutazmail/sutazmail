@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState, useEffect, useState } from "react";
+import { useActionState, useState } from "react";
 import { toast } from "sonner";
 import { ExternalLinkIcon, SparklesIcon } from "lucide-react";
 import {
@@ -45,20 +45,20 @@ export function AccountRowActions({ email, webmailBase }: { email: string; webma
 function ChangePasswordDialog({ email }: { email: string }) {
   const [open, setOpen] = useState(false);
   const [password, setPassword] = useState("");
-  const [state, formAction, pending] = useActionState<ActionResult | null, FormData>(
-    updatePasswordAction,
+  const [, formAction, pending] = useActionState<ActionResult | null, FormData>(
+    async (prev, fd) => {
+      const res = await updatePasswordAction(prev, fd);
+      if (res.ok) {
+        toast.success("Password changed");
+        setOpen(false);
+        setPassword("");
+      } else {
+        toast.error(res.error);
+      }
+      return res;
+    },
     null,
   );
-
-  useEffect(() => {
-    if (state?.ok) {
-      toast.success("Password changed");
-      setOpen(false);
-      setPassword("");
-    } else if (state && !state.ok) {
-      toast.error(state.error);
-    }
-  }, [state]);
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
@@ -105,19 +105,19 @@ function ChangePasswordDialog({ email }: { email: string }) {
 
 function DeleteAccountDialog({ email }: { email: string }) {
   const [open, setOpen] = useState(false);
-  const [state, formAction, pending] = useActionState<ActionResult | null, FormData>(
-    deleteAccountAction,
+  const [, formAction, pending] = useActionState<ActionResult | null, FormData>(
+    async (prev, fd) => {
+      const res = await deleteAccountAction(prev, fd);
+      if (res.ok) {
+        toast.success("Account deleted");
+        setOpen(false);
+      } else {
+        toast.error(res.error);
+      }
+      return res;
+    },
     null,
   );
-
-  useEffect(() => {
-    if (state?.ok) {
-      toast.success("Account deleted");
-      setOpen(false);
-    } else if (state && !state.ok) {
-      toast.error(state.error);
-    }
-  }, [state]);
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
