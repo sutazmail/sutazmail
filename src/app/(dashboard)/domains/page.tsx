@@ -3,6 +3,7 @@ import { listManagedDomains } from "@/server/domains";
 import { DkimRecord } from "@/components/domains/dkim-record";
 import { DnsRecords } from "@/components/domains/dns-records";
 import { AddDomainDialog } from "@/components/domains/add-domain-dialog";
+import { DeleteDomainButton } from "@/components/domains/delete-domain-button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 
@@ -37,6 +38,7 @@ export default async function DomainsPage() {
                     <Badge variant="secondary">
                       {d.mailboxes} {d.mailboxes === 1 ? "mailbox" : "mailboxes"}
                     </Badge>
+                    <DeleteDomainButton domain={d.name} mailboxes={d.mailboxes} />
                   </div>
                 </div>
                 <CardDescription>Publish these DNS records at your registrar.</CardDescription>

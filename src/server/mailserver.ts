@@ -367,6 +367,21 @@ export async function generateDkim(domain: string): Promise<void> {
   await runOrThrow(`setup config dkim keysize 2048 domain ${shellQuote(domain)}`, 60);
 }
 
+/**
+ * Remove a domain's DKIM key files. Best-effort (rm -f never errors if absent).
+ * SAFE: these files are per-domain-named, and domains SutazMail adds are never wired
+ * into the shared rspamd dkim_signing.conf (verified: `setup config dkim` creates keys
+ * but does not touch override.d), so removing them cannot affect any other domain's
+ * signing. `domain` passed assertDomain ([A-Za-z0-9.-] only) — no shell metacharacters.
+ */
+export async function removeDkim(domain: string): Promise<void> {
+  assertDomain(domain);
+  const dir = "/tmp/docker-mailserver/rspamd/dkim";
+  await runCommand(
+    `rm -f ${dir}/rsa-*-mail-${domain}.private.txt ${dir}/rsa-*-mail-${domain}.public.txt ${dir}/rsa-*-mail-${domain}.public.dns.txt`,
+  ).catch(() => undefined);
+}
+
 /** Best-effort read of a domain's DKIM public DNS record. Returns null if unavailable. */
 export async function readDkim(domain: string): Promise<string | null> {
   assertDomain(domain);

@@ -5,8 +5,9 @@
  * own editable DnsRecord rows.
  */
 import { prisma } from "./db";
-import { listAccounts, readDkim } from "./mailserver";
+import { listAccounts, readDkim, removeDkim } from "./mailserver";
 import { getDomainDns } from "./dns-records";
+import { assertDomain } from "./validate";
 import type { EditableDnsRecord } from "@/lib/dns";
 
 export type { EditableDnsRecord };
@@ -42,4 +43,38 @@ export async function listManagedDomains(): Promise<ManagedDomain[]> {
       };
     }),
   );
+}
+
+/**
+ * Delete a managed domain: refuses if the mail server still has mailboxes under it
+ * (never orphan real mailboxes), then removes the Domain row (its DnsRecord rows cascade),
+ * deletes the domain's DKIM key files, and cleans up the owning Org if it is now empty.
+ * Published DNS at the registrar is the operator's to remove — we only drop our records.
+ */
+export async function deleteManagedDomain(name: string): Promise<void> {
+  const domainName = name.trim().toLowerCase();
+  assertDomain(domainName);
+
+  const domain = await prisma.domain.findUnique({ where: { name: domainName } });
+  if (!domain) throw new Error("Domain not found");
+
+  const accounts = await listAccounts().catch(() => []);
+  const mailboxes = accounts.filter((a) => a.domain === domainName).length;
+  if (mailboxes > 0) {
+    throw new Error(
+      `Remove its ${mailboxes} mailbox${mailboxes === 1 ? "" : "es"} before deleting the domain`,
+    );
+  }
+
+  await prisma.domain.delete({ where: { id: domain.id } });
+  await removeDkim(domainName);
+
+  // Tidy up a now-empty tenant org (the seeded orgs always keep users, so are never removed).
+  const [remainingDomains, remainingUsers] = await Promise.all([
+    prisma.domain.count({ where: { orgId: domain.orgId } }),
+    prisma.user.count({ where: { orgId: domain.orgId } }),
+  ]);
+  if (remainingDomains === 0 && remainingUsers === 0) {
+    await prisma.org.delete({ where: { id: domain.orgId } }).catch(() => undefined);
+  }
 }

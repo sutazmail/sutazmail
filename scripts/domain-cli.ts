@@ -9,7 +9,7 @@
  */
 import { prisma } from "../src/server/db";
 import { generateDkim, readDkim } from "../src/server/mailserver";
-import { listManagedDomains } from "../src/server/domains";
+import { listManagedDomains, deleteManagedDomain } from "../src/server/domains";
 
 const [, , op, name, org] = process.argv;
 
@@ -28,8 +28,7 @@ if (op === "add") {
 } else if (op === "list") {
   console.log(JSON.stringify(await listManagedDomains(), null, 2));
 } else if (op === "del") {
-  await prisma.domain.deleteMany({ where: { name } });
-  await prisma.org.deleteMany({ where: { slug: name } });
+  await deleteManagedDomain(name);
   console.log("DELETED " + name);
 } else {
   throw new Error("usage: add|dkim|list|del");

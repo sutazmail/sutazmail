@@ -20,6 +20,7 @@ import {
   resetDnsRecords,
   updateDnsRecord,
 } from "@/server/dns-records";
+import { deleteManagedDomain } from "@/server/domains";
 
 export type ActionResult = { ok: true } | { ok: false; error: string };
 
@@ -249,6 +250,28 @@ export async function addDomainAction(
     await generateDkim(name);
     await audit("domain.add", name, { orgId: org.id, actorId: ctx.user.id });
     revalidatePath("/domains");
+    return { ok: true };
+  } catch (err) {
+    return fail(err);
+  }
+}
+
+/**
+ * Delete a domain from SutazMail (DB rows + DKIM key). Refuses while it still has
+ * mailboxes on the mail server. Does not remove published registrar DNS.
+ */
+export async function deleteDomainAction(
+  _prev: ActionResult | null,
+  formData: FormData,
+): Promise<ActionResult> {
+  const ctx = await requireAdmin();
+  const name = String(formData.get("domain") ?? "").trim().toLowerCase();
+  try {
+    await deleteManagedDomain(name);
+    // orgId is intentionally omitted: the owning org may have just been cleaned up.
+    await audit("domain.delete", name, { actorId: ctx.user.id });
+    revalidatePath("/domains");
+    revalidatePath("/");
     return { ok: true };
   } catch (err) {
     return fail(err);
