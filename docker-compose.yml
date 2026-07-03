@@ -1,0 +1,56 @@
+# SutazMail v2 stack — deploy dir on the NAS: /volume1/docker/sutazmail-v2/
+# The live v1 stack (/volume1/docker/sutazmail, port 8094) stays untouched until cutover.
+name: sutazmail-v2
+
+services:
+  sutazmail-db:
+    image: postgres:16.6-alpine
+    container_name: sutazmail-db
+    env_file: [.env] # POSTGRES_USER / POSTGRES_PASSWORD / POSTGRES_DB
+    volumes:
+      - ./data/pgdata:/var/lib/postgresql/data
+    # Internal-only: NOT on the shared tottynotti-network, so other stacks'
+    # containers (dms-gui, roundcube, …) cannot reach the database.
+    networks: [sutazmail-internal]
+    mem_limit: 512m
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  sutazmail:
+    build: .
+    image: sutazmail/app:0.2.0
+    container_name: sutazmail-v2
+    command: ["sh", "-c", "npx prisma migrate deploy && npm run db:seed && npm run start"]
+    restart: unless-stopped
+    # Loopback-only bind; exposed publicly via the DSM reverse proxy over HTTPS.
+    ports:
+      - "127.0.0.1:8095:3000"
+    env_file: .env
+    environment:
+      - NODE_ENV=production
+    depends_on:
+      sutazmail-db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    # tottynotti-network: resolve mailserver:8888 (REST) + :4190 (ManageSieve).
+    # sutazmail-internal: reach the database.
+    networks:
+      - tottynotti-network
+      - sutazmail-internal
+
+networks:
+  tottynotti-network:
+    external: true
+  sutazmail-internal:
+    name: sutazmail-internal
+    driver: bridge

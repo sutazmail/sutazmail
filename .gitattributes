@@ -1,0 +1,5 @@
+# Normalize line endings; shell scripts must stay LF to run in containers/servers.
+* text=auto
+*.sh text eol=lf
+*.py text eol=lf
+Dockerfile text eol=lf

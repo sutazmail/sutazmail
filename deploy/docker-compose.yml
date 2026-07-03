@@ -1,0 +1,91 @@
+# SutazMail full-stack deployment template: docker-mailserver + REST bridge +
+# SutazMail admin/portal + Postgres. Run ./deploy.sh for a guided one-shot setup,
+# or copy .env.example to .env, fill it in, and `docker compose up -d --build`.
+name: sutazmail
+
+services:
+  # ---------------------------------------------------------------- mail server
+  mailserver:
+    image: ghcr.io/docker-mailserver/docker-mailserver:15.1.0
+    container_name: mailserver
+    hostname: ${MAIL_HOSTNAME:?set MAIL_HOSTNAME in .env}
+    env_file: mailserver.env
+    environment:
+      # REST bridge key (deploy/dms-config/dms-gui/rest-api.py reads this).
+      - DMS_API_KEY=${DMS_API_KEY:?set DMS_API_KEY in .env}
+    ports:
+      - "25:25"     # SMTP (MTA to MTA)
+      - "143:143"   # IMAP STARTTLS
+      - "465:465"   # SMTP submission over TLS
+      - "587:587"   # SMTP submission STARTTLS
+      - "993:993"   # IMAP over TLS
+      # ManageSieve (4190) and the REST bridge (8888) stay docker-network-only.
+    volumes:
+      - ./data/dms/mail-data:/var/mail
+      - ./data/dms/mail-state:/var/mail-state
+      - ./data/dms/mail-logs:/var/log/mail
+      # DMS config dir: also carries the REST bridge (dms-gui/) and user-patches.sh,
+      # which installs the bridge into supervisor on every container start.
+      - ./dms-config:/tmp/docker-mailserver
+      - /etc/localtime:/etc/localtime:ro
+    stop_grace_period: 1m
+    restart: unless-stopped
+    healthcheck:
+      test: "ss --listening --tcp | grep -P 'LISTEN.+:smtp' || exit 1"
+      timeout: 3s
+      retries: 0
+    networks: [sutazmail-net]
+
+  # ------------------------------------------------------------------- database
+  sutazmail-db:
+    image: postgres:16.6-alpine
+    container_name: sutazmail-db
+    env_file: [.env] # POSTGRES_USER / POSTGRES_PASSWORD / POSTGRES_DB
+    volumes:
+      - ./data/pgdata:/var/lib/postgresql/data
+    # Internal-only network: nothing outside the stack can reach the database.
+    networks: [sutazmail-internal]
+    mem_limit: 512m
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # ------------------------------------------------------------------ SutazMail
+  sutazmail:
+    build: ..  # repo root (this file lives in deploy/)
+    image: sutazmail/app:latest
+    container_name: sutazmail
+    command: ["sh", "-c", "npx prisma migrate deploy && npm run db:seed && npm run start"]
+    restart: unless-stopped
+    # Loopback-only bind; put your reverse proxy (nginx/Caddy/Traefik) in front for HTTPS.
+    ports:
+      - "127.0.0.1:${APP_HOST_PORT:-8095}:3000"
+    env_file: .env
+    environment:
+      - NODE_ENV=production
+    depends_on:
+      sutazmail-db:
+        condition: service_healthy
+      mailserver:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    networks:
+      - sutazmail-net      # reach mailserver:8888 (REST) + mailserver:4190 (ManageSieve)
+      - sutazmail-internal # reach the database
+
+networks:
+  sutazmail-net:
+    name: sutazmail-net
+    driver: bridge
+  sutazmail-internal:
+    name: sutazmail-internal
+    driver: bridge

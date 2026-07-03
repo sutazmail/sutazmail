@@ -1,0 +1,177 @@
+// SutazMail v2 data model — identity/tenancy/audit live here (Postgres).
+// The mailserver remains the source of truth for MAIL (mailboxes, aliases, sieve).
+// Org is the tenant. Role USER rows mirror real mailboxes (User.email = mailbox
+// address) and authenticate against Dovecot — never a local hash. Admin roles
+// (SUPERADMIN, ORG_ADMIN) use bcrypt passwordHash. Prisma 7 prisma-client
+// generator + pg driver adapter (same stack as SutazStays).
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum Role {
+  SUPERADMIN // cross-org root (platform operator); local password
+  ORG_ADMIN  // manages one org's domains/mailboxes; local password
+  USER       // mailbox owner; authenticates against Dovecot
+}
+
+enum SubscriptionStatus {
+  trialing
+  active
+  past_due
+  canceled
+}
+
+model Org {
+  id        String   @id @default(cuid())
+  name      String
+  slug      String   @unique
+  createdAt DateTime @default(now())
+
+  domains      Domain[]
+  users        User[]
+  invites      Invite[]
+  auditLogs    AuditLog[]
+  subscription Subscription?
+}
+
+model Domain {
+  id            String   @id @default(cuid())
+  name          String   @unique // must match a domain served by the mailserver
+  orgId         String
+  org           Org      @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  // false = DNS follows the global Settings templates live; true = this domain's
+  // records were forked into DnsRecord rows and are managed per-record.
+  dnsCustomized Boolean  @default(false)
+  createdAt     DateTime @default(now())
+
+  dnsRecords DnsRecord[]
+
+  @@index([orgId])
+}
+
+/// Per-domain publishable DNS record (only exists once a domain's DNS is customized).
+/// Display/copy data for the registrar — never fed to a shell or resolver.
+model DnsRecord {
+  id        String   @id @default(cuid())
+  domainId  String
+  domain    Domain   @relation(fields: [domainId], references: [id], onDelete: Cascade)
+  type      String // MX, TXT, A, AAAA, CNAME, SRV, NS, CAA
+  host      String // record name as published, e.g. "sutaz.ca." or "_dmarc.sutaz.ca."
+  value     String
+  position  Int
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([domainId, position])
+}
+
+model User {
+  id           String    @id @default(cuid())
+  email        String    @unique // stored lowercased; for role USER this IS the mailbox address
+  displayName  String?
+  role         Role
+  orgId        String? // null only for SUPERADMIN
+  org          Org?      @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  passwordHash String? // bcrypt cost 12; admin roles only
+  totpSecret   String?
+  totpEnabled  Boolean   @default(false)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  disabledAt   DateTime?
+
+  sessions     Session[]
+  appPasswords AppPassword[]
+  auditLogs    AuditLog[]
+
+  @@index([orgId])
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+  expiresAt DateTime
+  ip        String?
+  userAgent String?
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+model AppPassword {
+  id         String    @id @default(cuid())
+  userId     String
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  label      String
+  createdAt  DateTime  @default(now())
+  lastUsedAt DateTime?
+
+  @@index([userId])
+}
+
+model Invite {
+  id         String    @id @default(cuid())
+  email      String
+  role       Role
+  orgId      String
+  org        Org       @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  tokenHash  String    @unique
+  expiresAt  DateTime
+  acceptedAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@index([orgId])
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  orgId     String?
+  org       Org?     @relation(fields: [orgId], references: [id], onDelete: SetNull)
+  actorId   String?
+  actor     User?    @relation(fields: [actorId], references: [id], onDelete: SetNull)
+  action    String // dotted verb, e.g. account.create, alias.delete, session.login
+  target    String // affected object, e.g. mailbox address / org slug
+  detail    Json?
+  createdAt DateTime @default(now())
+
+  @@index([orgId, createdAt])
+  @@index([actorId, createdAt])
+}
+
+/// Editable app configuration (key/value), so operators change the mail connection
+/// profile, webmail URL, and DNS templates from the UI — no redeploy. See settings.ts.
+model Setting {
+  key       String   @id
+  value     String
+  updatedAt DateTime @updatedAt
+}
+
+model Plan {
+  id                String @id @default(cuid())
+  name              String @unique
+  priceMonthlyCents Int
+  limits            Json // e.g. {"mailboxes": 25, "domains": 3, "storagePerBoxMb": 10240}
+
+  subscriptions Subscription[]
+}
+
+model Subscription {
+  id                   String             @id @default(cuid())
+  orgId                String             @unique
+  org                  Org                @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  planId               String
+  plan                 Plan               @relation(fields: [planId], references: [id])
+  status               SubscriptionStatus @default(trialing)
+  stripeCustomerId     String?
+  stripeSubscriptionId String?
+  currentPeriodEnd     DateTime?
+  createdAt            DateTime           @default(now())
+  updatedAt            DateTime           @updatedAt
+}

@@ -1,0 +1,9 @@
+node_modules
+.next
+.git
+.env
+*.md
+docs
+coverage
+# Postgres data volume lives inside the stack dir on the NAS — never build-context it.
+data
